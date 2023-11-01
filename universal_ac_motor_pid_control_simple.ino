@@ -24,17 +24,17 @@ int levelread = 0;                  // variable to store the value read on analo
 
 const int sampleRate = 1;           // Variable that determines how fast our PID loop
 const int rpmcorrection = 00;       // sito kazkodel reikia, kad realus rpm atitiktu matuojamus
-const int protection = 2000;        // protection will switch on when real rpm exceeds desired by value
+const int protection = 3000;        // protection will switch on when real rpm exceeds desired by value
 const int debounceDelay = 50;       // the debounce time; 
 const int minoutputlimit = 80;      // limit of PID output
 const int maxoutputlimit = 540;     // limit of PID output
-const int mindimminglimit = 80;     // the shortest delay before triac fires
+const int mindimminglimit = 20;     // the shortest delay before triac fires
 const int maxdimminglimit = 625;    // for 60Hz will be 520
 const int risetime = 100;           // RPM rise time delay in microseconds (risetime x RPM)
 int desiredRPM = 0;        // ENTER DESIRED RPM HERE
 
 int dimming = 540;                  // this should be the same as maxoutputlimit
-int tempcounter = 100;
+int tempcounter = 200;
 
 byte relayState = LOW;              // the current state of the relay pin
 byte buttonState;                   // the current reading from the input pin
@@ -48,6 +48,7 @@ double Setpoint, Input, Output;       // define PID variables
 double sKp = 0.1, sKi = 0.2, sKd = 0; // PID tuning parameters for starting motor
 double rKp = 0.25, rKi = 1, rKd = 0;  // PID tuning parameters for runnig motor
 
+//PID myPID(&Input, &Output, &Setpoint, sKp, sKi, sKd, DIRECT); // define PID variables and parameters
 PID myPID(&Input, &Output, &Setpoint, sKp, sKi, sKd, DIRECT); // define PID variables and parameters
 
 int nbinterrupt = 0;
@@ -72,10 +73,13 @@ void setup() {
   myPID.SetSampleTime(sampleRate);    // Sets the sample rate
 
   // set up Timer1
-  OCR1A = 100;                        // initialize the comparator
-  TIMSK1 = 0x03;                      // enable comparator A and overflow interrupts
-  TCCR1A = 0x00;                      // timer control registers set for
-  TCCR1B = 0x00;                      // normal operation, timer disabled
+  OCR1A = 100;                        // comparator overflow set to 100.
+  TIMSK1 = 0x03;                      // enable comparator A and overflow interrupts : timer interruption mask = 00000011
+                                      // CS10=0 CS11=0 => division timer by 64 => 4µS
+  TCCR1A = 0x00;                      //  CS12=0, 0CS10=0 CS11=0 => timer disabled 
+                                      // timer control registers set for 
+  TCCR1B = 0x00;                      // CS12=0, 0CS10=0 CS11=0 => timer disabled
+                                      //  normal operation, timer disabled
 
   // set up zero crossing interrupt IRQ0 on pin 2.
   // set up tacho sensor interrupt IRQ1 on pin3
@@ -84,13 +88,17 @@ void setup() {
 }
 
 // Interrupt Service Routines
+// on zero crossing detction : 
+// - start timer
+// - set OCR1A to the duration desired
 void zeroCrossingInterrupt() { // zero cross detect
 
   TCCR1B = 0x04;               // start timer with divide by 256 input
   TCNT1 = 0;                   // reset timer - count from zero
   OCR1A = dimming;             // set the compare register brightness desired.
 }
-
+// Losqu'n atteint OCR1A, 
+// commence le décompte à 65536 - 2 
 ISR(TIMER1_COMPA_vect) {       // comparator match
   if (startflag == true) {     // flag for start up delay
     digitalWrite(GATE, HIGH);  // set TRIAC gate to high
@@ -108,7 +116,7 @@ void tacho() {
   //nbinterrupt++;
   count++;
   unsigned long tachotime = micros() - lastflash;
-  float time_in_sec  = ((float)tachotime + rpmcorrection) / 1000000;
+  float time_in_sec  = ((float)tachotime ) / 1000000;
   float prerpm = 60 / time_in_sec;
   RPM = prerpm / TACHOPULSES;
   lastflash = micros();
@@ -116,13 +124,16 @@ void tacho() {
 
 void loop() {
   levelread = analogRead(LEVELRPM);  // read the input pin
+  Serial.print(desiredRPM);          // debug value
+  Serial.print('\t');
   Serial.print(RPM);          // debug value
   Serial.print('\t');
-  Serial.println(Setpoint);
-  
+  Serial.print(Setpoint);
+  Serial.print('\t');
+  Serial.println(dimming);
   // Serial.print("Int ");  
  //Serial.println(nbinterrupt);  
-  desiredRPM = levelread*2; 
+  desiredRPM = levelread*4; 
   // check the start / stop button state
   int reading = digitalRead(BUTTON);  // read the state of the switch into a local variable:
   if (reading != lastButtonState) {   // If the switch changed, due to noise or pressing
@@ -161,6 +172,7 @@ void loop() {
       Input = RPM;
       Setpoint = tempcounter;
       myPID.Compute();
+      // mise à jour de l'amortissement 
       dimming = map(Output, minoutputlimit, maxoutputlimit, maxoutputlimit, minoutputlimit); // inverse the output
       dimming = constrain(dimming, mindimminglimit, maxdimminglimit);     // check that dimming is in 20-625 range
       tempcounter++;
@@ -211,12 +223,15 @@ void loop() {
     RPM = 0;
   }
 
-  // protection against high rpm. i e triac damage
-  if (relayState == HIGH && RPM > desiredRPM + protection) {
-    startflag = false;            // flag to turn off triac before relay turns off
-    delay (300);                  // delay to prevent sparks on relay contacts
-    digitalWrite(RELAY, LOW);
-    relayState = LOW;
-     Serial.println("hight rpm protection active");          // debug value
-  }
+//  // protection against high rpm. i e triac damage
+//  if (relayState == HIGH && RPM > desiredRPM + protection) {
+//    startflag = false;            // flag to turn off triac before relay turns off
+//    delay (300);                  // delay to prevent sparks on relay contacts
+//    digitalWrite(RELAY, LOW);
+//    relayState = LOW;
+//     Serial.print("hight rpm protection active\t");          // debug value
+//     Serial.print(RPM);          // debug value
+//     Serial.print("\t");          // debug value
+//     Serial.println(desiredRPM + protection);          // debug value
+//  }
 }
